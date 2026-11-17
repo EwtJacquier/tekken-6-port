@@ -1,0 +1,4 @@
+# Guest functions replaced by hand-written C in mods/*.c (the original stays callable as f_X_orig).
+08869e00
+08a3bed4
+089e9958

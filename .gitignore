@@ -1,0 +1,22 @@
+# Game data (never commit)
+*.iso
+*.elf
+*.bin
+EBOOT*
+# Build outputs and regenerable data
+build/
+port/build/
+port/generated/
+re/ghidra_project/
+re/tools/prxdec/build/
+re/tools/prxdec/prxdec
+__pycache__/
+*.o
+re/export/*.log
+.env
+*.env
+# Tools installed locally (large, downloaded)
+port/third_party/realesrgan
+port/third_party/ffmpeg/wasm32/
+port/third_party/ffmpeg/x86_64/
+re/scratch/
