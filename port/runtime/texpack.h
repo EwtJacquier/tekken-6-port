@@ -2,7 +2,8 @@
 //
 // The pack is a folder: index.txt lists one replacement per line, "<key> <iw> <ih> <file>", and
 // each file is a QOI image. <key> is CRC-32 then Adler-32 (16 hex digits) of the RGBA bytes of the
-// picture's own iw x ih texels, the top-left corner of the texture the game uploads; the image is
+// picture's own iw x ih texels, the top-left corner of the texture the game uploads (of the next
+// powers of two, else named after the file: "<key> <iw> <ih> <file> <tw> <th>"); the image is
 // that picture at an integer scale. Native: T6_TEXTURES (default build/textures). Web: the page
 // writes index.txt to /textures and the images are fetched when first needed. A new index.txt is
 // read again while the game runs. Nothing of the game's own files changes: without the pack (or
@@ -22,6 +23,8 @@ uint64_t texpack_key(const uint32_t *px, int w, int iw, int ih);
 bool texpack_set_enabled(bool on);
 // The replacement for a texture decoded to px (w x h RGBA texels, rows of w), or -1.
 int texpack_find(const uint32_t *px, int w, int h);
+// The key and picture size of the pack's entry idx (0 if there is none).
+uint64_t texpack_entry_key(int idx, int *iw, int *ih);
 // Its pixels (malloc'ed; the caller frees them), *pw x *ph for the *iw x *ih texels it replaces.
 // NULL while the file is still being fetched (web), or for good when *failed is set.
 uint32_t *texpack_load(int idx, int *pw, int *ph, int *iw, int *ih, bool *failed);

@@ -23,6 +23,14 @@
 #include "platform.h"
 #include "rt.h"
 
+// What differs from game to game. This file is the same in every port (its switches' prefix
+// aside, T6_ here); only these lines are the game's own.
+#define GE_STENCIL_ALPHA 0       // the framebuffer's alpha made from its stencil before it is read (T6_STENCIL_ALPHA)
+#define GE_FBO_CLUT_SKIP 0       // draws reading a framebuffer as a CLUT texture left out (T6_FBO_CLUT=1 draws them)
+#define GE_BLEND_DOUBLE_ALPHA 0  // the double-alpha blend factors double the alpha (1) or the source color (0)
+#define GE_TILES_PACK_KEY 0      // T6_TILES lines name the texture pack's key and picture size (1) or the catalog's (0)
+#define GE_TEXCAT_WHERE 0        // T6_TEXCATALOG lines "key w h fmt addr where frame stride" (1) or "... scene frame" (0)
+
 // ---------------------------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------------------------
@@ -109,12 +117,20 @@ typedef struct {
 	                   // replacement's own scale (texpack.c), 1 for the texture as the GE has it
 	int pack1;         // a replacement still on its way (web): its index + 1, else 0
 	uint32_t *ui_orig; // ... for a UI atlas with words: its pixels as the game has them (uitext_over)
+	uint32_t *orig;    // ... else its pixels as the game has them (pack_upload: past a picture that
+	                   // covers only a corner of the texture)
 	bool mips;         // a replacement with its mipmaps (sampled smoothly when it shows smaller)
 	uint64_t pack_frame, changed_frame;
 	uint8_t changes;   // contents replaced in consecutive frames (movies): not looked up
 	uint32_t *look;    // its pixels while the pack is still to be looked up for them (look_poll)
 	uint64_t look_key; // ... their content (the memo's key) and whether text.h redraws them
 	bool look_claimed;
+	uint32_t *up_px;   // a big replacement going to the GPU a strip a frame (pack_poll), into up_tex
+	GLuint up_tex;
+	int up_W, up_H, up_row, up_s;
+	uint64_t tile_key;  // T6_TILES with GE_TILES_PACK_KEY: the pack's key of its picture, the picture's size
+	int tile_iw, tile_ih;
+	uint64_t cat_key;  // T6_TEXCATALOG: its key in the catalog (0: not catalogued, contents that keep changing)
 } TexEntry;
 #define MAX_TEX 512
 static TexEntry texcache[MAX_TEX];
@@ -312,7 +328,8 @@ static const char *FS =
 	"    if (u_fogEnable == 1) c.rgb = mix(u_fogColor, c.rgb, clamp(v_fog, 0.0, 1.0));\n"
 	"  }\n"
 	"  o = clamp(c, 0.0, 1.0);\n"
-	"  if (u_blendDouble == 1) o.rgb = min(o.rgb * 2.0, vec3(1.0));\n"
+	"  if (u_blendDouble == 1) o.rgb = min(o.rgb * 2.0, vec3(1.0));\n"  // src * 2a as (2 src) * a
+	"  else if (u_blendDouble == 2) o.a = min(o.a * 2.0, 1.0);\n"
 	"}\n";
 
 static GLuint compile(GLenum type, const char *src) {
@@ -398,15 +415,13 @@ void ge_init(void) {
 // ---------------------------------------------------------------------------------------------
 // Framebuffers
 // ---------------------------------------------------------------------------------------------
+// The framebuffer at an address: the one drawn last there (a game may draw at one address with two
+// widths in turn, e.g. a 64- and a 512-pixel-wide buffer each frame: both are kept).
 static Fbo *fbo_find(uint32_t vaddr) {
-	static Fbo *last;  // (one framebuffer per address: every draw asks for its target)
-	if (last && last->used && last->addr == vaddr) return last;
-	for (int i = 0; i < MAX_FBOS; i++) {
-		if (fbos[i].used && fbos[i].addr == vaddr) {
-			return last = &fbos[i];
-		}
-	}
-	return NULL;
+	Fbo *best = NULL;
+	for (int i = 0; i < MAX_FBOS; i++)
+		if (fbos[i].used && fbos[i].addr == vaddr && (!best || fbos[i].last_draw > best->last_draw)) best = &fbos[i];
+	return best;
 }
 
 static void batch_flush(void);
@@ -555,10 +570,17 @@ void ge_set_ui_filter(int mode) {
 }
 
 static Fbo *fbo_get(uint32_t vaddr, int width, int height) {
-	Fbo *f = fbo_find(vaddr);
-	if (f && f->width == width && f->height >= height) {
-		return f;
+	static Fbo *last;  // every draw asks for its target
+	if (last && last->used && last->addr == vaddr && last->width == width && last->height >= height) return last;
+	Fbo *f = NULL;
+	int at_addr = 0;
+	for (int i = 0; i < MAX_FBOS; i++) {
+		if (!fbos[i].used || fbos[i].addr != vaddr) continue;
+		at_addr++;
+		if (fbos[i].width == width && fbos[i].height >= height) return last = &fbos[i];
+		if (!f || fbos[i].last_draw < f->last_draw) f = &fbos[i];
 	}
+	if (at_addr < 2) f = NULL;  // a second size at this address gets a framebuffer of its own
 	batch_flush();  // queued draws may target or sample the framebuffer being replaced
 	if (!f) {
 		for (int i = 0; i < MAX_FBOS && !f; i++) {
@@ -592,7 +614,7 @@ static Fbo *fbo_get(uint32_t vaddr, int width, int height) {
 	free(init);
 	gl_invalidate();
 	TRACE("GE: new framebuffer %08x %dx%d", vaddr, width, height);
-	return f;
+	return last = f;
 }
 
 static void bind_target(void) {
@@ -690,8 +712,15 @@ void ge_hitch(uint64_t frame_us) {
 }
 
 // A replacement texture (pw x ph for the iw x ih texels of a w x h texture) into e->tex at its own
-// scale; texels past the picture repeat its last column and row. False if the GPU can't hold it.
-static bool pack_upload(TexEntry *e, const uint32_t *px, int pw, int ph, int iw, int ih, int w, int h) {
+// scale; texels past the picture are the texture's own (orig, w x h, the game's: a picture that is
+// a corner of its texture, the lab having left out what the game never drew there), else repeat
+// its last column and row. False if the GPU can't hold it.
+// A big one (PACK_STRIPS_FROM texels and up: a 2048x2048 picture is 16 MB) goes to the GPU over
+// several frames instead (pack_poll): sent at once it held a frame up for 25-40 ms in the browser.
+#define PACK_STRIPS_FROM (1024 * 1024)
+#define PACK_STRIP_TEXELS (512 * 1024)
+static void gl_invalidate(void);
+static bool pack_upload(TexEntry *e, const uint32_t *px, int pw, int ph, int iw, int ih, int w, int h, const uint32_t *orig) {
 	static GLint max_size;
 	if (!max_size) glGetIntegerv(GL_MAX_TEXTURE_SIZE, &max_size);
 	int s = pw / iw, W = w * s, H = h * s;
@@ -701,10 +730,24 @@ static bool pack_upload(TexEntry *e, const uint32_t *px, int pw, int ph, int iw,
 		full = malloc((size_t)W * H * 4);
 		for (int y = 0; y < H; y++) {
 			const uint32_t *row = px + (size_t)(y < ph ? y : ph - 1) * pw;
+			const uint32_t *own = orig ? orig + (size_t)(y / s) * w : NULL;
 			uint32_t *d = full + (size_t)y * W;
-			memcpy(d, row, (size_t)pw * 4);
-			for (int x = pw; x < W; x++) d[x] = row[pw - 1];
+			if (y < ph || !own) memcpy(d, row, (size_t)pw * 4);
+			else for (int x = 0; x < pw; x++) d[x] = own[x / s];
+			for (int x = pw; x < W; x++) d[x] = own ? own[x / s] : row[pw - 1];
 		}
+	}
+	if ((int64_t)W * H >= PACK_STRIPS_FROM) {  // big: a strip a frame, the original shown meanwhile
+		if (!full) full = malloc((size_t)W * H * 4), memcpy(full, px, (size_t)W * H * 4);
+		glGenTextures(1, &e->up_tex);
+		glBindTexture(GL_TEXTURE_2D, e->up_tex);
+		// (storage that can be filled again: the texture becomes the cache slot's, and the slot
+		// later takes other textures' pixels with glTexImage2D. Made with glTexStorage2D it was
+		// immutable, those uploads failed, and the slot went on showing this picture in their place)
+		TIMED_DO(gpu, glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, W, H, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL));
+		gl_invalidate();
+		e->up_px = full, e->up_W = W, e->up_H = H, e->up_row = 0, e->up_s = s;
+		return true;
 	}
 	if (!e->tex) glGenTextures(1, &e->tex);
 	glBindTexture(GL_TEXTURE_2D, e->tex);
@@ -734,11 +777,36 @@ static void pack_poll_(TexEntry *e) {
 	if (spent_us >= PACK_FRAME_US) return;
 	e->pack_frame = frame_no;
 	uint64_t t0 = rt_now_us();
+	if (e->up_px) {  // a big one on its way: its next strips, within this frame's time
+		batch_flush();
+		glBindTexture(GL_TEXTURE_2D, e->up_tex);
+		int rows = PACK_STRIP_TEXELS / e->up_W > 0 ? PACK_STRIP_TEXELS / e->up_W : 1;
+		while (e->up_row < e->up_H && spent_us + (rt_now_us() - t0) < PACK_FRAME_US) {
+			int n = e->up_H - e->up_row < rows ? e->up_H - e->up_row : rows;
+			TIMED_DO(gpu, glTexSubImage2D(GL_TEXTURE_2D, 0, 0, e->up_row, e->up_W, n, GL_RGBA, GL_UNSIGNED_BYTE,
+			                              e->up_px + (size_t)e->up_row * e->up_W));
+			e->up_row += n;
+		}
+		if (e->up_row >= e->up_H) {  // all there: the mipmaps, then it takes the original's place
+			TIMED_DO(mip, glGenerateMipmap(GL_TEXTURE_2D));
+			if (e->tex) glDeleteTextures(1, &e->tex);
+			e->tex = e->up_tex, e->up_tex = 0;
+			free(e->up_px);
+			e->up_px = NULL;
+			e->scale = (float)e->up_s;
+			e->mips = true;
+			e->pack1 = 0;
+			prof.n_pack++;
+		}
+		gl_invalidate();
+		spent_us += rt_now_us() - t0;
+		return;
+	}
 	int pw, ph, iw, ih;
 	bool failed;
 	uint32_t *px = TIMED(read, texpack_load(e->pack1 - 1, &pw, &ph, &iw, &ih, &failed));
 	if (!px) {
-		if (failed) e->pack1 = 0, free(e->ui_orig), e->ui_orig = NULL;
+		if (failed) e->pack1 = 0, free(e->ui_orig), e->ui_orig = NULL, free(e->orig), e->orig = NULL;
 		return;
 	}
 	uint64_t t1 = rt_now_us();
@@ -755,12 +823,14 @@ static void pack_poll_(TexEntry *e) {
 		e->scale = (float)rs;
 		e->mips = false;
 	} else {  // (text.h stopped drawing the atlas meanwhile: the picture as it is)
-		pack_upload(e, px, pw, ph, iw, ih, e->w, e->h);
+		pack_upload(e, px, pw, ph, iw, ih, e->w, e->h, e->ui_orig ? e->ui_orig : e->orig);
 	}
 	free(e->ui_orig);
 	e->ui_orig = NULL;
+	free(e->orig);
+	e->orig = NULL;
 	free(px);
-	e->pack1 = 0;
+	if (!e->up_px) e->pack1 = 0;  // (a big one keeps coming here for its strips)
 	uint64_t t2 = rt_now_us();
 	spent_us += t2 - t0;
 	static int slow_log = -1;  // T6_TEXPACK_SLOW=ms: the pictures that took longer than that
@@ -797,6 +867,9 @@ static void memo_put(uint64_t k, int pk, bool claimed) {
 	memo[(uint32_t)(k ^ k >> 29) % MEMO_N].claimed = claimed;
 }
 
+// Mods: a texture's pixels as decoded, before the pack is looked up for them (RGBA, w x h).
+__attribute__((weak)) void rt_texture_decoded(uint32_t *px, int w, int h) { (void)px, (void)w, (void)h; }
+
 // A new texture shows at once as the game has it (or its words redrawn) and its pack picture is
 // looked up afterwards, a few milliseconds' worth a frame: a new screen brings tens of textures,
 // and their lookups in the frame they came in held it up (a stutter at every change). The picture
@@ -812,6 +885,7 @@ static void look_poll(TexEntry *e) {
 	if (pk >= 0) {
 		e->pack1 = pk + 1;
 		if (e->look_claimed) e->ui_orig = e->look, e->look = NULL;  // pack_poll draws the words over the picture
+		else free(e->orig), e->orig = e->look, e->look = NULL;      // (pack_upload)
 	}
 	free(e->look);
 	e->look = NULL;
@@ -822,12 +896,12 @@ static void look_poll(TexEntry *e) {
 // is read as a texture: games mark pixels in the stencil and read them back as alpha (a glow that
 // takes only the pixels whose alpha has a bit of the glowing objects' stencil value). The alpha is
 // cleared, then each stencil bit adds its value where it is set: 9 full-screen passes, color
-// untouched. Off unless T6_STENCIL_ALPHA=1: Tekken 6 reads its framebuffer only for the colors (the
-// bloom), and with these passes its fighters came out striped and see-through at high render
-// scales (the scenery's railings and lamps through them).
+// untouched (a glow that takes only the pixels whose alpha has one bit of it). GE_STENCIL_ALPHA
+// (T6_STENCIL_ALPHA): off where a game reads its framebuffer only for the colors (a bloom): there
+// its fighters came out striped and see-through at high render scales.
 static void fbo_alpha_from_stencil(Fbo *f) {
 	static int on = -1;
-	if (on < 0) on = getenv("T6_STENCIL_ALPHA") && atoi(getenv("T6_STENCIL_ALPHA")) != 0;
+	if (on < 0) on = getenv("T6_STENCIL_ALPHA") ? atoi(getenv("T6_STENCIL_ALPHA")) != 0 : GE_STENCIL_ALPHA;
 	if (!on || !f->stencil_used || f->alpha_synced == f->last_draw) return;
 	batch_flush();
 	f->alpha_synced = f->last_draw;
@@ -903,12 +977,14 @@ static void fbo_debug_dump(Fbo *f) {
 // earlier runs found. rt_scene (mods: what the game is showing) names where it was seen.
 uint32_t rt_scene;
 static bool tex_sweeping;  // T6_TEXSWEEP is decoding (texture_sweep)
-static void texcat_add(const TexEntry *slot, const uint32_t *px, int w, int h, int fmt, uint32_t addr) {
-	static const char *dir = (const char *)1;
+static const char *texcat_dir = (const char *)1;
+static void texcat_uv_read(void);
+static void texcat_uv_write(void);
+static void texcat_add(TexEntry *slot, const uint32_t *px, int w, int h, int stride, int fmt, uint32_t addr) {
 	static uint64_t *seen;
 	static size_t n_seen, cap_seen;
-	if (dir == (const char *)1) {
-		dir = getenv("T6_TEXCATALOG");
+	if (texcat_dir == (const char *)1) {
+		const char *dir = texcat_dir = getenv("T6_TEXCATALOG");
 		if (dir) {  // what earlier runs found
 			char path[512];
 			snprintf(path, sizeof path, "%s/index.txt", dir);
@@ -922,13 +998,20 @@ static void texcat_add(const TexEntry *slot, const uint32_t *px, int w, int h, i
 			}
 			if (f) fclose(f);
 			rt_log("texture catalog: %zu textures in %s so far", n_seen, dir);
+			texcat_uv_read();
+			atexit(texcat_uv_write);
 		}
 	}
+	const char *dir = texcat_dir;
+	slot->cat_key = 0;
 	if (!dir || slot->changes >= 2 || w < 4 || h < 4 || rt_psmf_frame_at(addr)) return;
 	uint64_t key = texpack_key(px, w, w, h);
 	if (tex_sweeping) rt_log("texture sweep: %08x %dx%d -> %016llx", addr, w, h, (unsigned long long)key);
 	for (size_t i = 0; i < n_seen && !tex_sweeping; i++)
-		if (seen[i] == key) return;
+		if (seen[i] == key) {
+			slot->cat_key = key;
+			return;
+		}
 	// Contents that keep changing at one place (water, lava, things drawn by the CPU): new ones
 	// within a few frames of each other more than twice. The extractor drops the ones written
 	// before that was clear (the "D" lines).
@@ -949,6 +1032,7 @@ static void texcat_add(const TexEntry *slot, const uint32_t *px, int w, int h, i
 	}
 	if (n_seen == cap_seen) cap_seen = cap_seen * 2 + 1024, seen = realloc(seen, cap_seen * sizeof *seen);
 	seen[n_seen++] = key;
+	slot->cat_key = key;
 	char path[512];
 	snprintf(path, sizeof path, "%s/%016llx.rgba", dir, (unsigned long long)key);
 	FILE *f = fopen(path, "wb");
@@ -959,11 +1043,120 @@ static void texcat_add(const TexEntry *slot, const uint32_t *px, int w, int h, i
 	fclose(f);
 	snprintf(path, sizeof path, "%s/index.txt", dir);
 	if ((f = fopen(path, "a"))) {
-		fprintf(f, "%016llx %d %d %d %08x %u %llu\n", (unsigned long long)key, w, h, fmt, addr, rt_scene, (unsigned long long)frame_no);
+		// rt_scene, with 0x8000 when the texture is first drawn in 3D (not through mode) and 0x4000 when
+		// on a skinned model (vertex weights: the fighters; stages and effects have none)
+		uint32_t where = rt_scene | ((reg[0x12] >> 23) & 1 ? 0 : 0x8000u) | ((reg[0x12] >> 9) & 3 ? 0x4000u : 0);
+		if (GE_TEXCAT_WHERE)
+			fprintf(f, "%016llx %d %d %d %08x %u %llu %d\n", (unsigned long long)key, w, h, fmt, addr, where, (unsigned long long)frame_no,
+			        stride);
+		else
+			fprintf(f, "%016llx %d %d %d %08x %u %llu\n", (unsigned long long)key, w, h, fmt, addr, rt_scene, (unsigned long long)frame_no);
 		fclose(f);
 	}
 }
 
+// What of each catalogued texture the game draws: how far right and down the texels its draws map
+// reach (2D, and 3D mapped by UV), the most seen, in dir/uv.txt "key u v" (written every few
+// seconds and at the end). A texture's rows may be narrower than it, texels past a row coming
+// from the next one (the character select's portraits: 272 texels in a texture 512 wide), and
+// under the picture comes whatever is next in memory: the extractor keeps the corner drawn.
+enum { TEXCAT_UV = 1 << 14 };
+static struct {
+	uint64_t key;
+	uint16_t u, v;
+} texcat_uv[TEXCAT_UV];
+static bool texcat_uv_dirty;
+
+static void texcat_uv_write(void) {
+	if (!texcat_uv_dirty || !texcat_dir || texcat_dir == (const char *)1) return;
+	texcat_uv_dirty = false;
+	char path[512], tmp[520];
+	snprintf(path, sizeof path, "%s/uv.txt", texcat_dir);
+	snprintf(tmp, sizeof tmp, "%s.tmp", path);
+	FILE *f = fopen(tmp, "w");
+	if (!f) return;
+	for (int i = 0; i < TEXCAT_UV; i++)
+		if (texcat_uv[i].key) fprintf(f, "%016llx %d %d\n", (unsigned long long)texcat_uv[i].key, texcat_uv[i].u, texcat_uv[i].v);
+	fclose(f);
+	rename(tmp, path);
+}
+
+static void texcat_uv_put(uint64_t key, int u, int v) {
+	uint32_t i = (uint32_t)((key * 0x9E3779B97F4A7C15ull) >> 50);
+	for (int n = 0; n < TEXCAT_UV && texcat_uv[i].key && texcat_uv[i].key != key; n++) i = (i + 1) & (TEXCAT_UV - 1);
+	if (texcat_uv[i].key && texcat_uv[i].key != key) return;  // full
+	if (texcat_uv[i].key == key && texcat_uv[i].u >= u && texcat_uv[i].v >= v) return;
+	texcat_uv[i].key = key;
+	if (u > texcat_uv[i].u) texcat_uv[i].u = (uint16_t)u;
+	if (v > texcat_uv[i].v) texcat_uv[i].v = (uint16_t)v;
+	texcat_uv_dirty = true;
+}
+
+static void texcat_uv_read(void) {  // what earlier runs in the folder found
+	char path[512], line[128];
+	snprintf(path, sizeof path, "%s/uv.txt", texcat_dir);
+	FILE *f = fopen(path, "r");
+	unsigned long long k;
+	int u, v;
+	while (f && fgets(line, sizeof line, f))
+		if (sscanf(line, "%llx %d %d", &k, &u, &v) == 3 && k) texcat_uv_put(k, u, v);
+	if (f) fclose(f);
+	texcat_uv_dirty = false;
+}
+
+static void texcat_extent(uint64_t key, const GVert *tv, int count, int tw, int th) {
+	float um = 0, vm = 0;
+	for (int i = 0; i < count; i++) {
+		if (tv[i].u > um) um = tv[i].u;
+		if (tv[i].v > vm) vm = tv[i].v;
+	}
+	int u = (int)ceilf(um * (float)tw - 0.01f), v = (int)ceilf(vm * (float)th - 0.01f);
+	texcat_uv_put(key, u > tw ? tw : u, v > th ? th : v);
+	static uint64_t written;
+	if (texcat_uv_dirty && frame_no - written >= 300) written = frame_no, texcat_uv_write();
+}
+
+// T6_TILES=file[:N] (with T6_TEXCATALOG; for pictures the game draws in pieces, READY! as a
+// texture of 256 and one of 128 side by side): every 2D draw of a catalogued texture (in every Nth
+// frame), "frame fb key iw ih x0 y0 x1 y1 u0 v0 u1 v1" (its catalog key and size, framebuffer
+// pixels, texels), for the lab's mosaics.py.
+static FILE *tiles_f;
+static int tiles_on = -1, tiles_every = 1;
+static bool tiles_enabled(void) {
+	if (tiles_on < 0) {
+		const char *e = getenv("T6_TILES");
+		char path[512];
+		snprintf(path, sizeof path, "%s", e ? e : "");
+		char *colon = strrchr(path, ':');
+		if (colon && atoi(colon + 1) > 0) tiles_every = atoi(colon + 1), *colon = 0;
+		tiles_f = e ? fopen(path, "a") : NULL;
+		if (tiles_f) setvbuf(tiles_f, NULL, _IOLBF, 0);
+		tiles_on = tiles_f != NULL;
+	}
+	return tiles_on;
+}
+// key and its size (kw x kh): the catalog's key and the texture's size, or (GE_TILES_PACK_KEY) the
+// pack's key and its picture's size
+static void tiles_log(uint64_t key, int kw, int kh, const GVert *tv, int count, int type, float fbw, float fbh, int tw, int th,
+                      float uvsx, float uvsy) {
+	FILE *f = tiles_f;
+	if (!tiles_enabled() || frame_no % (uint64_t)tiles_every || !(type == 6 || count <= 6)) return;
+	f = tiles_f;
+	int step = type == 6 ? 2 : count;
+	for (int i = 0; i + step <= count; i += step) {
+		float x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f, u0 = 1e30f, v0 = 1e30f, u1 = -1e30f, v1 = -1e30f;
+		for (int k = i; k < i + step; k++) {
+			float x = (tv[k].x + 1) * 0.5f * fbw, y = (1 + tv[k].y) * 0.5f * fbh;  // through mode: w is 1
+			float u = tv[k].u / uvsx * (float)tw, v = tv[k].v / uvsy * (float)th;
+			x0 = fminf(x0, x), y0 = fminf(y0, y), x1 = fmaxf(x1, x), y1 = fmaxf(y1, y);
+			u0 = fminf(u0, u), v0 = fminf(v0, v), u1 = fmaxf(u1, u), v1 = fmaxf(v1, v);
+		}
+		fprintf(f, "%llu %06x %016llx %d %d %.1f %.1f %.1f %.1f %.1f %.1f %.1f %.1f\n", (unsigned long long)frame_no, cur_fbo->addr,
+		        (unsigned long long)key, kw, kh, x0, y0, x1, y1, u0, v0, u1, v1);
+	}
+}
+
+static int last_slot = -1;  // the cache slot of the last texture texture_get gave
 static GLuint texture_get_(int *tw, int *th, float *uvsx, float *uvsy);
 static GLuint texture_get(int *tw, int *th, float *uvsx, float *uvsy) { return TIMED(tex, texture_get_(tw, th, uvsx, uvsy)); }
 // Test aid for the texture catalog: T6_TEXSWEEP=addr:stride:count:clut_offset[:first]. Once the
@@ -1148,8 +1341,7 @@ static GLuint texture_get_(int *tw, int *th, float *uvsx, float *uvsy) {
 		clut_hash = (fmt == 4 ? clut_h64 : clut_h1k) * 31 + reg[0xC5];
 		key ^= clut_hash * 0x9E3779B97F4A7C15ull;
 	}
-	// Consecutive draws usually use the same texture.
-	static int last_slot = -1;
+	// Consecutive draws usually use the same texture (last_slot).
 	if (last_slot >= 0 && !tex_sweeping) {
 		TexEntry *e = &texcache[last_slot];
 		if (e->tex && e->key == key && e->checked == frame_no) {
@@ -1206,8 +1398,17 @@ static GLuint texture_get_(int *tw, int *th, float *uvsx, float *uvsy) {
 	else slot = lru, slot->changes = 0, tex_at[at_i] = (int16_t)(slot - texcache);
 	slot->changed_frame = frame_no;
 	slot->pack1 = 0;
+	slot->cat_key = 0;
+	if (slot->up_px || slot->up_tex) {  // a replacement half way to the GPU: dropped with the old contents
+		free(slot->up_px);
+		slot->up_px = NULL;
+		if (slot->up_tex) glDeleteTextures(1, &slot->up_tex);
+		slot->up_tex = 0;
+	}
 	free(slot->ui_orig);
 	slot->ui_orig = NULL;
+	free(slot->orig);
+	slot->orig = NULL;
 	free(slot->look);
 	slot->look = NULL;
 	last_slot = (int)(slot - texcache);
@@ -1275,7 +1476,7 @@ static GLuint texture_get_(int *tw, int *th, float *uvsx, float *uvsy) {
 	}
 	if (fmt >= 8) {  // PSP DXT blocks: indices first, then the two 565 colors (alpha after for DXT3/5)
 		// (DXT colors keep red in the high bits, as DXT does elsewhere: the other way round from the
-		// GE's 565 textures; read as those, Tekken 6's character select portraits came out blue)
+		// GE's 565 textures; read as those, a game's character select portraits came out blue)
 		int bs = fmt == 8 ? 8 : 16;
 		for (int by = 0; by < (h + 3) / 4; by++) {
 			for (int bx = 0; bx < (w + 3) / 4; bx++) {
@@ -1334,7 +1535,12 @@ static GLuint texture_get_(int *tw, int *th, float *uvsx, float *uvsy) {
 	free(unswz);
 	prof.dec += rt_now_us() - t_dec;
 
-	texcat_add(slot, out, w, h, fmt, addr);
+	texcat_add(slot, out, w, h, stride, fmt, addr);
+	if (GE_TILES_PACK_KEY && tiles_enabled()) {
+		int i = texpack_find(out, w, h);
+		slot->tile_key = i >= 0 ? texpack_entry_key(i, &slot->tile_iw, &slot->tile_ih) : 0;
+	}
+	rt_texture_decoded(out, w, h);  // mods: a texture changed as it comes (mods/title.c hides one)
 	// A replacement from the texture pack (the HD textures) takes the place of everything below.
 	static int pack_log = -1;
 	if (pack_log < 0) pack_log = getenv("T6_TEXPACK_LOG") != NULL;
@@ -1389,7 +1595,8 @@ static GLuint texture_get_(int *tw, int *th, float *uvsx, float *uvsy) {
 		bool failed;
 		uint32_t *px = TIMED(read, texpack_load(pk, &pw, &ph, &iw, &ih, &failed));
 		slot->w = w, slot->h = h;
-		bool shown = px && pack_upload(slot, px, pw, ph, iw, ih, w, h);
+		bool shown = px && pack_upload(slot, px, pw, ph, iw, ih, w, h, out);
+		if (shown && slot->up_px) shown = false, slot->pack1 = pk + 1;  // big: by strips, the original meanwhile
 		free(px);
 		if (shown) {
 			if (pack_log) rt_log("texpack: replaced %016llx (%dx%d of %dx%d) at %dx", (unsigned long long)texpack_key(out, w, iw, ih), iw, ih, w, h, (int)slot->scale);
@@ -1401,7 +1608,12 @@ static GLuint texture_get_(int *tw, int *th, float *uvsx, float *uvsy) {
 			tex_mips = slot->mips;
 			return slot->tex;
 		}
-		if (!px && !failed) slot->pack1 = pk + 1;  // on its way (web): the original until then
+		if (!px && !failed) {  // on its way (web): the original until then
+			slot->pack1 = pk + 1;
+			free(slot->orig);
+			slot->orig = malloc(sizeof *out * (size_t)w * h);
+			if (slot->orig) memcpy(slot->orig, out, sizeof *out * (size_t)w * h);
+		}
 	}
 	static const char *texdump = (const char *)1;
 	if (texdump == (const char *)1) texdump = getenv("T6_TEXDUMP");
@@ -1568,6 +1780,7 @@ static void read_vertex(const VFmt *f, const uint8_t *p, RawVert *v) {
 		uint32_t rgba = conv16(c, f->col - 4);
 		memcpy(v->col, &rgba, 4);
 	}
+	else if (f->col) memset(v->col, 0, 4);  // (a color format the GE doesn't have)
 	if (f->nrm) rd_n(p + f->off_nrm, f->nrm, 3, true, norm, v->nrm);
 	int pk = f->pos ? f->pos : 3;
 	if (f->through && pk != 3) {  // through-mode z is unsigned
@@ -1960,7 +2173,7 @@ static void transform(const VFmt *f, const RawVert *rv, GVert *o) {
 // BOUNDINGBOX (as PPSSPP has it, DrawEngineCommon::TestBoundingBox): the vertices (skinned, then
 // by the world matrix) are tested against the planes of the screen area the GE draws to (offset,
 // scissor and region; near and far only with depth clamping); out of sight when all of them are
-// outside one plane. Of more than 0x100 vertices the GE looks at one run of 0x100 only. Tekken 6
+// outside one plane. Of more than 0x100 vertices the GE looks at one run of 0x100 only. a game
 // tests ~440 boxes a frame and skips (BJUMP) what is out of sight; drawn anyway, things the game
 // had stopped updating came out as polygons from nowhere.
 bool ge_bounding_box(uint32_t count) {
@@ -2385,7 +2598,11 @@ static void build_state(RenderState *s, bool through, bool clear) {
 		s->blend = 1;
 		s->bsrc = gl_blend_factor(sf, true, reg[0xE0]);
 		s->bdst = gl_blend_factor(df, false, reg[0xE1]);
-		s->blend_double = sf == 6;  // DOUBLESRCALPHA: src * 2a == (2 * src) * a
+		// DOUBLESRCALPHA / ONE_MINUS_DOUBLESRCALPHA: the source alpha doubled (to 1 at most) for
+		// both factors (games with alpha 0x80 as "opaque" blend src * 1 + dst * 0 with them)
+		// DOUBLESRCALPHA / DOUBLEINVSRCALPHA: the alpha doubled (2), or (GE_BLEND_DOUBLE_ALPHA 0, the
+		// older way) the source color for DOUBLESRCALPHA as the source factor (1)
+		s->blend_double = GE_BLEND_DOUBLE_ALPHA ? (sf == 6 || sf == 7 || df == 6 || df == 7 ? 2 : 0) : sf == 6;
 		if (s->bsrc == GL_CONSTANT_COLOR || s->bdst == GL_CONSTANT_COLOR) {
 			uint32_t fix = s->bsrc == GL_CONSTANT_COLOR ? reg[0xE0] : reg[0xE1];
 			s->bcolor[0] = (fix & 0xFF) / 255.f;
@@ -2480,9 +2697,16 @@ static void draw_prim(uint32_t data) {
 	build_state(&st, f.through, clear);
 	st.tex_enable = tex_on;
 	// A framebuffer read as a 565 texture has no alpha (the GE reads 1): ours keeps whatever alpha
-	// the draws left (Tekken 6's bloom reads its quarter-size copy so, and its glow came out patchy,
+	// the draws left (a game's bloom reads its quarter-size copy so, and its glow came out patchy,
 	// the scenery showing through the fighters)
 	if (tex_on && tex_from_fbo && (reg[0xC3] & 0xF) == 0 && st.tfunc_rgba) st.tfunc_rgba = 2;
+	{  // A framebuffer read as a CLUT texture (its pixels as palette indices: the fight's shadows, an
+		// ID buffer with one bit per character projected onto the stage) is not done yet: drawn with
+		// its colors as they are, it painted the characters black; left out (T6_FBO_CLUT=1 draws it).
+		static int raw = -1;
+		if (raw < 0) raw = getenv("T6_FBO_CLUT") ? atoi(getenv("T6_FBO_CLUT")) != 0 : !GE_FBO_CLUT_SKIP;
+		if (!raw && tex_on && tex_from_fbo && (reg[0xC3] & 0xF) >= 4) return;
+	}
 	if (tex_on) {
 		uint32_t flt = reg[0xC6], wrap = reg[0xC7];
 		st.tex = tex;
@@ -2530,11 +2754,16 @@ static void draw_prim(uint32_t data) {
 			tv[i] = vc_val[slot];
 			continue;
 		}
-		RawVert rv = {0};
+		// (only what read_vertex may leave unwritten and a later step reads is cleared: zeroing the
+		// whole vertex was a memset call per vertex, millions a second in the browser)
+		RawVert rv;
 		if (f.morphs == 1) {
+			if (dumping) memset(&rv, 0, sizeof rv);  // (the dump hashes it whole)
+			else rv.uv[0] = rv.uv[1] = 0, rv.nrm[0] = rv.nrm[1] = rv.nrm[2] = 0;
 			read_vertex(&f, MP(vaddr + vi * (uint32_t)f.size * 1), &rv);
 		}
 		else {  // morph targets are stored back to back
+			memset(&rv, 0, sizeof rv);
 			for (int m = 0; m < f.morphs; m++) {
 				RawVert t = {0};
 				read_vertex(&f, MP(vaddr + (vi * (uint32_t)f.morphs + (uint32_t)m) * (uint32_t)f.size), &t);
@@ -2555,6 +2784,16 @@ static void draw_prim(uint32_t data) {
 		if (vcache) vc_gen[slot] = vc_now, vc_tag[slot] = vi, vc_val[slot] = tv[i];
 	}
 	if (clear && st.st_on && count > 0) st.st_ref = tv[count - 1].c0[3];  // the clear's stencil value
+	if (tex_on && !tex_from_fbo && texcat_dir && texcat_dir != (const char *)1 && last_slot >= 0 && texcache[last_slot].tex == tex &&
+	    texcache[last_slot].cat_key && (f.through || (reg[0xC0] & 3) == 0)) {
+		texcat_extent(texcache[last_slot].cat_key, tv, count, tw, th);
+		if (f.through && !GE_TILES_PACK_KEY) tiles_log(texcache[last_slot].cat_key, tw, th, tv, count, type, fbw, fbh, tw, th, uvsx, uvsy);
+	}
+	if (GE_TILES_PACK_KEY && f.through && tex_on && last_slot >= 0 && texcache[last_slot].tex == tex && texcache[last_slot].tile_key &&
+	    tiles_enabled()) {
+		const TexEntry *e = &texcache[last_slot];
+		tiles_log(e->tile_key, e->tile_iw, e->tile_ih, tv, count, type, fbw, fbh, tw, th, uvsx, uvsy);
+	}
 	// T6_GE_BIG=1 (diagnostics): blended draws of a few vertices covering most of the screen
 	static int ge_big = -1;
 	if (ge_big < 0) ge_big = getenv("T6_GE_BIG") != NULL;
@@ -2587,10 +2826,13 @@ static void draw_prim(uint32_t data) {
 			float x = tv[i].x / w, y = tv[i].y / w;
 			bx0 = fminf(bx0, x), by0 = fminf(by0, y), bx1 = fmaxf(bx1, x), by1 = fmaxf(by1, y), wmin = fminf(wmin, tv[i].w);
 		}
-		fprintf(df, "D2 %d t=%d n=%d vt=%06x raw=%016llx mtx=%016llx bb=%.3f,%.3f,%.3f,%.3f wmin=%.3f v=%08x i=%08x at=%08x fb=%06x tex=%d@%08x tm=%x\n",
+		fprintf(df, "D2 %d t=%d n=%d vt=%06x raw=%016llx mtx=%016llx bb=%.3f,%.3f,%.3f,%.3f wmin=%.3f v=%08x i=%08x at=%08x fb=%06x tex=%d@%08x tm=%x"
+		        " blend=%d/%06x fix=%06x/%06x tfunc=%06x psm=%x tfmt=%x atest=%d/%06x stest=%d/%06x zt=%d/%x zmsk=%x cmask=%06x/%02x lmode=%d\n",
 		        draw_i, type, count, reg[0x12], (unsigned long long)h_raw, (unsigned long long)h_m, bx0, by0, bx1, by1, wmin, vaddr,
 		        iaddr, prim_cmd_addr, cur_fbo->addr, tex_on, tex_on ? (((reg[0xA8] & 0xFF0000u) << 8) | (reg[0xA0] & 0xFFFFFFu)) : 0,
-		        reg[0xC0]);
+		        reg[0xC0], reg[0x21] & 1, reg[0xDF] & 0xFFFFFF, reg[0xE0] & 0xFFFFFF, reg[0xE1] & 0xFFFFFF, reg[0xC9] & 0xFFFFFF,
+		        reg[0xD2] & 3, reg[0xC3] & 0xF, reg[0x22] & 1, reg[0xDB] & 0xFFFFFF, reg[0x24] & 1, reg[0xDC] & 0xFFFFFF,
+		        reg[0x23] & 1, reg[0xDE] & 7, reg[0xE7] & 1, reg[0xE8] & 0xFFFFFF, reg[0xE9] & 0xFF, reg[0x17] & 1);
 		// Vertices of T6_GEDUMP_VERTS=vtype:mincount draws, and of small draws spanning more
 		// than the screen (the shape of a broken triangle).
 		static int want_n = -2;
@@ -2632,7 +2874,7 @@ static void draw_prim(uint32_t data) {
 	// address (x, y of 0..4096 before the drawing offset) is not drawn at all, nor (without depth
 	// clamping) one with a vertex outside the depth range; a vertex behind the near plane is
 	// clipped instead (as PPSSPP has it). The GL would draw such triangles stretched to the edge of
-	// the screen: polygons out of nowhere in some Tekken 6 stages. cull[i]: tv[i] is out.
+	// the screen: polygons out of nowhere in some games' stages. cull[i]: tv[i] is out.
 	static uint8_t *cull;
 	static size_t cull_cap;
 	bool any_cull = false;
@@ -2972,8 +3214,9 @@ void ge_command(uint32_t cmd, uint32_t data, uint32_t addr) {
 		uint32_t a = ((reg[0xB1] & 0xF0000u) << 8) | (reg[0xB0] & 0xFFFFFFu);
 		uint32_t bytes = (data & 0x3F) * 32;
 		if (bytes > sizeof clut) bytes = sizeof clut;
-		if (rt_valid(a, bytes)) memcpy(clut, MP(a), bytes);
-		clut_dirty = true;
+		// a game loads the same palette again draw after draw (thousands of times a frame): only one
+		// that changes what is there is hashed again
+		if (rt_valid(a, bytes) && memcmp(clut, MP(a), bytes)) memcpy(clut, MP(a), bytes), clut_dirty = true;
 		break;
 	}
 	case 0xEA: block_transfer(data); break;
@@ -2999,8 +3242,14 @@ void ge_forget_textures(void) {
 		texcache[i].hash = 0, texcache[i].checked = 0, texcache[i].pack1 = 0;
 		free(texcache[i].ui_orig);
 		texcache[i].ui_orig = NULL;
+		free(texcache[i].orig);
+		texcache[i].orig = NULL;
 		free(texcache[i].look);
 		texcache[i].look = NULL;
+		free(texcache[i].up_px);
+		texcache[i].up_px = NULL;
+		if (texcache[i].up_tex) glDeleteTextures(1, &texcache[i].up_tex);
+		texcache[i].up_tex = 0;
 	}
 	memset(memo, 0, sizeof memo);  // the pack or the switches changed
 }
