@@ -214,6 +214,7 @@
   /* the key art: the right side, full height, fading in from the form's side */
   #login-art, #preload-art { position: absolute; right: 0; bottom: 0; height: 100%; min-width: 55%; max-width: 62%; object-fit: cover; object-position: right;
     -webkit-mask-image: linear-gradient(to right, transparent, #000 26%); mask-image: linear-gradient(to right, transparent, #000 26%);
+    filter: saturate(.2) hue-rotate(220deg);  /* toned to the storm sky's blue-grey (the user's call) */
     z-index: 1; }
   #login .side, #preload .side { position: relative; z-index: 2; display: flex; flex-direction: column; align-items: center; padding: 24px;
     box-sizing: border-box; min-height: 100vh; justify-content: safe center; gap: 10px; }
