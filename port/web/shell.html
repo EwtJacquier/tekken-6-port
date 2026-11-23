@@ -21,104 +21,195 @@
   })();
 </script>
 <style>
-  /* Tekken 6: the King of Iron Fist Tournament's look. Windows are brushed steel edged in fire,
-     titles in condensed italic caps, the chosen button burns orange to gold; behind it all, the
-     disc's own key art (PIC1.PNG, from the player's ISO: serve_web.py /art/) in the smoke. */
+  /* Tekken 6 in the look of its own menus on the PSP: a storm-cloud sky; black glass panels in a
+     bevelled silver rim; words in wide italic capitals, silver, the picked one cyan in its dark
+     rimmed bar; the main button the red chrome of the character select's frame; the button hints
+     (✕ OK, ◯ BACK) in white rings; the download bar the fight's life gauge, its count the timer.
+     The lettering is Saira (SIL OFL: web/fonts/Saira-OFL.txt), wide and italic as the game's. */
+  @font-face { font-family: Saira; font-style: italic; font-weight: 500 900; font-stretch: 112% 125%; font-display: swap;
+    src: url(fonts/saira-italic.woff2) format("woff2"); }
   :root {
     color-scheme: dark;
-    --bg: #000; --text: #e9ecf1; --muted: #9aa3ad; --line: #30363d;
-    --steel-0: #07080a; --steel-1: #111419; --steel-2: #1b2028; --steel-3: #2b313b; --edge: #4b5260; --edge-hi: #7a8494;
-    --fire-1: #ffe08a; --fire-2: #ffb02e; --fire-3: #ff6a1a; --red: #e3361c; --red-dark: #8f1a0d; --ice: #a9c8e8; --ice-dark: #3d5a78;
-    --ink: #e9ecf1; --ink-soft: #a3abb6;
-    --title: italic 800 15px/1.1 "Bahnschrift Condensed", "Arial Narrow", "Roboto Condensed", "Liberation Sans Narrow", "Nimbus Sans Narrow", Impact, sans-serif;
-    --body: "Segoe UI", system-ui, Verdana, Tahoma, sans-serif;
+    --bg: #000; --text: #f2f3f5; --muted: #a3a9b3; --soft: #c9cdd4;
+    --cyan: #33b7f0; --cyan-hi: #8fdcff; --red-1: #ff6a58; --red-2: #d11a21; --red-3: #7d070c;
+    --glass: rgba(7, 8, 11, .84); --hair: rgba(170, 176, 186, .2);
+    --rim: linear-gradient(160deg, #f4f6f9, #8d939c 28%, #2c2f35 52%, #6e737c 78%, #c3c8d0);
+    --rim-soft: linear-gradient(160deg, #c3c8d0, #5a5f68 40%, #24272c 60%, #7c818a);
+    --wide: Saira, "Arial Black", Impact, sans-serif;
+    --body: Verdana, "DejaVu Sans", Tahoma, sans-serif;
+    /* the menus' sky: storm clouds, blue-grey and violet, a red glow where the logo burns */
+    --clouds: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1400' height='900'%3E%3Cfilter id='a' x='0' y='0' width='1' height='1'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.0018 .0042' numOctaves='5' seed='11'/%3E%3CfeColorMatrix values='0 0 0 0 .86 0 0 0 0 .87 0 0 0 0 .97 1.9 0 0 0 -.78'/%3E%3C/filter%3E%3Cfilter id='b' x='0' y='0' width='1' height='1'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.003 .009' numOctaves='4' seed='4'/%3E%3CfeColorMatrix values='0 0 0 0 .05 0 0 0 0 .05 0 0 0 0 .09 0 1.8 0 0 -.72'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23a)'/%3E%3Crect width='100%25' height='100%25' filter='url(%23b)'/%3E%3C/svg%3E");
   }
-  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, sans-serif; overflow: hidden; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 14px/1.5 var(--body); overflow: hidden; }
   /* The game fills the window at the PSP's 480:272 aspect ratio. */
   #stage { position: fixed; inset: 0; display: grid; place-items: center; }
   #canvas { display: block; width: min(100vw, calc(100vh * 480 / 272)); aspect-ratio: 480 / 272; background: #000; outline: none; }
   #picker { position: fixed; inset: 0; display: none; place-items: center; text-align: center; padding: 16px; }
-  #picker .win { width: min(440px, 100%); }
+  #picker .win { width: min(460px, 100%); }
   #picker label.go { display: inline-block; margin-top: 14px; cursor: pointer; }
   #picker input { display: none; }
-  #status { position: fixed; left: 0; right: 0; bottom: 12px; text-align: center; color: var(--muted); pointer-events: none;
-            transition: opacity .6s; }
+  #status { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); pointer-events: none; transition: opacity .6s; white-space: nowrap;
+            padding: 4px 16px; border-radius: 6px; background: rgba(4,5,7,.82); border: 1px solid #4a4f57;
+            font: italic 700 expanded 13px var(--wide); letter-spacing: .4px; text-transform: uppercase; color: var(--text); }
+  #status:empty { display: none; }
   #crash { position: fixed; inset: auto 16px 16px 16px; display: none; max-height: 45vh; overflow: auto; padding: 12px 14px;
-           background: rgba(13, 17, 23, .95); border: 1px solid #f85149; border-radius: 8px; color: var(--text);
+           background: rgba(8, 6, 8, .95); border: 1px solid var(--red-2); border-radius: 8px; color: var(--text);
            font: 12px/1.45 ui-monospace, monospace; white-space: pre-wrap; user-select: text; }
-  #crash b { color: #f85149; font: 600 14px system-ui, sans-serif; }
+  #crash b { color: var(--red-1); font: italic 800 expanded 14px var(--wide); text-transform: uppercase; }
 
-  /* ---- The two corner buttons, top right: settings (ice) and fullscreen (fire), steel discs;
-     gone in fullscreen (Esc, or the gamepad's Home, opens the settings) */
-  .corner { all: unset; position: fixed; right: 12px; z-index: 1; width: 42px; height: 42px; border-radius: 50%; cursor: pointer;
-            display: grid; place-items: center; color: #fff; box-sizing: border-box; border: 2px solid var(--steel-0);
-            box-shadow: inset 0 0 0 2px rgba(255,255,255,.22), inset 0 -6px 10px rgba(0,0,0,.35), 0 2px 0 var(--steel-0), 0 5px 12px rgba(0,0,0,.5); }
-  .corner:hover { filter: brightness(1.15); }
-  .corner:active { transform: translateY(2px); box-shadow: inset 0 0 0 2px rgba(255,255,255,.22), 0 1px 0 var(--steel-0); }
-  .corner:focus-visible { outline: 3px solid var(--fire-2); outline-offset: 2px; }
-  .corner svg { width: 20px; height: 20px; filter: drop-shadow(0 1px 0 rgba(0,0,0,.5)); }
-  #gear { top: 12px; background: radial-gradient(circle at 35% 30%, #d6e8fa, #6f93b8 50%, var(--ice-dark)); }
-  #full { top: 62px; background: radial-gradient(circle at 35% 30%, #ffc28a, var(--red) 55%, var(--red-dark)); }
+  /* ---- Corner buttons: black glass discs in a silver rim, the icon lights cyan; gone in
+     fullscreen (Esc, or the gamepad's Home, opens the settings there) */
+  .corner { all: unset; position: fixed; right: 12px; z-index: 1; width: 44px; height: 44px; border-radius: 50%; cursor: pointer;
+            display: grid; place-items: center; color: #fff; box-sizing: border-box; border: 2px solid transparent;
+            background: radial-gradient(circle at 40% 25%, #3a3e46, #0b0c0f 70%) padding-box, var(--rim) border-box;
+            box-shadow: 0 0 0 1px #000, 0 6px 16px rgba(0,0,0,.6); transition: color .12s, box-shadow .12s; }
+  .corner:hover { color: var(--cyan-hi); box-shadow: 0 0 0 1px #000, 0 0 14px rgba(51,183,240,.6), 0 6px 16px rgba(0,0,0,.6); }
+  .corner:active { transform: translateY(1px); }
+  .corner:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
+  .corner svg { width: 20px; height: 20px; filter: drop-shadow(0 1px 0 rgba(0,0,0,.6)); }
+  #gear { top: 12px; }
+  #full { top: 66px; }
   html:fullscreen .corner { display: none; }
 
-  /* ---- Settings: the same steel window as the sign-in screen (.win, below) */
+  /* ---- A panel: black glass in a bevelled silver rim, its title in wide italic capitals behind a
+     red mark, the button hints along its foot */
+  .win { position: relative; width: min(420px, 100%); box-sizing: border-box; border-radius: 12px; text-align: left; overflow: hidden;
+    border: 2px solid transparent; background: linear-gradient(rgba(14,15,19,.9), rgba(4,4,6,.92)) padding-box, var(--rim) border-box;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.16), 0 0 0 1px rgba(0,0,0,.85), 0 18px 44px rgba(0,0,0,.6); }
+  .win .bar { position: relative; display: flex; align-items: center; gap: 10px; padding: 12px 18px 10px;
+    font: italic 800 expanded 17px/1.1 var(--wide); letter-spacing: .4px; text-transform: uppercase; color: #fff; white-space: nowrap;
+    text-shadow: 0 2px 0 #000, 0 0 10px rgba(0,0,0,.6);
+    background: linear-gradient(rgba(255,255,255,.07), transparent); }
+  .win .bar::after { content: ""; position: absolute; left: 14px; right: 14px; bottom: 0; height: 1px;
+    background: linear-gradient(90deg, rgba(220,224,230,.75), rgba(220,224,230,.15) 70%, transparent); }
+  /* the mark: a red slash, the logo's colour */
+  .win .bar .ball { width: 7px; height: 20px; flex: none; transform: skewX(-20deg); border-radius: 1px;
+    background: linear-gradient(var(--red-1), var(--red-2) 55%, var(--red-3)); box-shadow: 0 0 8px rgba(209,26,33,.6); }
+  .win .body { position: relative; padding: 14px 18px 0; color: var(--text); }
+  .win p { margin: 0 0 10px; font-size: 13px; line-height: 1.5; color: var(--soft); letter-spacing: .2px; }
+
+  /* tabs and choices: the menus' items, silver; the picked one cyan in its dark rimmed bar */
+  .tabs { display: flex; gap: 6px; margin: 0 0 6px; }
+  .tabs button, #menu .seg button, #menu button.toggle { all: unset; cursor: pointer; box-sizing: border-box; padding: 4px 14px 5px; border-radius: 7px;
+    font: italic 800 expanded 14px/1.2 var(--wide); letter-spacing: .3px; text-transform: uppercase; color: #b4b9c2;
+    text-shadow: 0 1px 0 #000, 0 0 4px rgba(0,0,0,.8); border: 1px solid transparent; text-align: center; transition: color .1s; }
+  .tabs button:hover, #menu .seg button:hover, #menu button.toggle:hover { color: #fff; }
+  .tabs button[aria-pressed="true"], #menu .seg button[aria-pressed="true"], #menu button.toggle[aria-pressed="true"] {
+    color: var(--cyan); background: linear-gradient(rgba(0,0,0,.85), rgba(12,13,16,.85)) padding-box, var(--rim-soft) border-box;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.12), 0 0 0 1px rgba(0,0,0,.8), 0 0 12px rgba(51,183,240,.18); }
+  .tabs button:focus-visible, #menu button:focus-visible, .go:focus-visible, .guest:focus-visible {
+    outline: 2px solid var(--cyan); outline-offset: 2px; }
+
+  .field { display: flex; flex-direction: column; gap: 5px; margin-top: 12px;
+    font: italic 700 expanded 12px var(--wide); letter-spacing: .4px; text-transform: uppercase; color: #e3e6ea; }
+  .field small { font: 11px var(--body); text-transform: none; letter-spacing: 0; color: var(--muted); margin-left: 4px; }
+  .field input { font: 15px var(--body); letter-spacing: .3px; color: #fff; background: rgba(0,0,0,.72); padding: 7px 10px; border-radius: 7px;
+    border: 1px solid #4e535c; box-shadow: inset 0 2px 5px rgba(0,0,0,.85), 0 1px 0 rgba(255,255,255,.07); text-transform: none; }
+  .field input:hover { border-color: #7a808a; }
+  .field input:focus { outline: 0; border-color: var(--cyan); box-shadow: inset 0 2px 5px rgba(0,0,0,.85), 0 0 0 2px rgba(51,183,240,.3), 0 0 14px rgba(51,183,240,.35); }
+  /* the browser's autofill keeps the page's colors */
+  .field input:-webkit-autofill, .field input:autofill { -webkit-text-fill-color: #fff; caret-color: #fff;
+    -webkit-box-shadow: 0 0 0 40px #050507 inset; box-shadow: 0 0 0 40px #050507 inset; transition: background-color 99999s; }
+  .field input:-webkit-autofill:focus, .field input:autofill:focus { -webkit-box-shadow: 0 0 0 40px #050507 inset, 0 0 0 2px rgba(51,183,240,.3);
+    box-shadow: 0 0 0 40px #050507 inset, 0 0 0 2px rgba(51,183,240,.3); }
+  .check { display: flex; gap: 8px; align-items: flex-start; margin-top: 12px; font-size: 12px; color: var(--soft); }
+  .check input { margin-top: 2px; accent-color: var(--cyan); }
+  #login .error { margin: 10px 0 8px; font: 700 13px var(--body); color: #ff8f80; text-align: center; }
+  #login .error:empty { margin: 14px 0 0; }
+
+  /* the main button: the red chrome of the character select's frame */
+  .go { all: unset; position: relative; cursor: pointer; box-sizing: border-box; padding: 9px 30px 10px; border-radius: 9px;
+    font: italic 800 expanded 18px/1.1 var(--wide); letter-spacing: .6px; text-transform: uppercase; color: #fff;
+    text-shadow: 0 2px 0 #4a0306, 0 0 6px rgba(0,0,0,.45); border: 2px solid transparent;
+    background: linear-gradient(#ff7a68, var(--red-2) 44%, #8e0a10 56%, #c3151c) padding-box, var(--rim) border-box;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.45), 0 0 0 1px #000, 0 6px 18px rgba(209,26,33,.32); transition: filter .12s, box-shadow .12s; }
+  .go:hover { filter: brightness(1.12); box-shadow: inset 0 1px 0 rgba(255,255,255,.45), 0 0 0 1px #000, 0 0 22px rgba(255,70,50,.6); }
+  .go:active { transform: translateY(1px); filter: brightness(.95); }
+  .go:disabled { filter: grayscale(1) brightness(.7); cursor: default; transform: none; }
+  .actions { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+  #login .actions { justify-content: center; }
+  /* the other buttons: black glass in the silver rim */
+  .guest, #menu button { all: unset; box-sizing: border-box; cursor: pointer; padding: 5px 16px 6px; border-radius: 7px; text-align: center; white-space: nowrap;
+    font: italic 800 expanded 12px/1.2 var(--wide); letter-spacing: .4px; text-transform: uppercase; color: var(--text);
+    border: 1px solid transparent; background: linear-gradient(#2a2d33, #0d0e11) padding-box, var(--rim-soft) border-box;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.14), 0 0 0 1px rgba(0,0,0,.8); transition: color .1s, box-shadow .12s; }
+  .guest:hover, #menu button:hover { color: var(--cyan-hi); box-shadow: inset 0 1px 0 rgba(255,255,255,.14), 0 0 0 1px rgba(0,0,0,.8), 0 0 12px rgba(51,183,240,.35); }
+  .guest:active, #menu button:active { transform: translateY(1px); }
+  /* the foot: a line of help, and the button hints in white rings as the game shows them */
+  .tip { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 16px -18px 0 !important; padding: 9px 18px 10px;
+    background: rgba(0,0,0,.5); border-top: 1px solid var(--hair); font-size: 11px !important; color: var(--muted) !important; text-align: left; }
+  .hints { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font: italic 800 expanded 12px var(--wide); letter-spacing: .5px; color: #fff; }
+  .k { display: inline-grid; place-items: center; width: 18px; height: 18px; box-sizing: border-box; border-radius: 50%; border: 2px solid #fff;
+    font: 700 10px/1 var(--body); color: #fff; font-style: normal; }
+  /* what the server offers: two lights on a glass strip */
+  .leds { display: flex; flex-wrap: wrap; gap: 4px 18px; justify-content: center; margin-top: 6px; padding: 5px 16px; border-radius: 8px;
+    background: rgba(4,5,7,.8); border: 1px solid #3c4048; box-shadow: 0 4px 12px rgba(0,0,0,.45);
+    font: italic 700 expanded 12px var(--wide); letter-spacing: .3px; text-transform: uppercase; color: var(--text); }
+  .leds span::before { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 7px; vertical-align: 0;
+    background: radial-gradient(circle at 35% 35%, #8a919b 0 20%, #3a4048 60%); box-shadow: 0 0 0 1px rgba(0,0,0,.6); }
+  .leds span.on::before { background: radial-gradient(circle at 35% 35%, #fff 0 20%, var(--cyan) 60%); box-shadow: 0 0 8px var(--cyan), 0 0 0 1px rgba(0,0,0,.5); }
+  .fine { font-size: 11px; color: var(--muted); text-align: center; max-width: 420px; margin: 0; padding: 5px 14px; border-radius: 8px;
+    background: rgba(4,5,7,.72); letter-spacing: .2px; }
+  #login.new .login-only, #login:not(.new) .new-only { display: none; }
+
+  /* ---- Settings: a menu screen over the game */
   #menu { position: fixed; inset: 0; display: none; place-items: center; padding: 16px; z-index: 3;
-          background: rgba(4, 6, 9, .7); font-family: var(--body); color: var(--ink); }
+          background: rgba(5, 6, 10, .7); backdrop-filter: blur(3px); font-family: var(--body); color: var(--text); }
   #menu.open { display: grid; }
-  #menu .win { width: min(680px, 100%); max-height: calc(100vh - 32px); display: flex; flex-direction: column; }
-  #menu .bar h1 { flex: 1; margin: 0; font: var(--title); font-size: 19px; letter-spacing: .5px; }
-  #menu .bar #close { font-size: 12px; padding: 4px 12px; }
-  #menu .body { overflow: auto; padding: 12px 20px 18px; }
-  #menu .hint { margin: 0 0 4px; font-size: 12px; color: var(--ink-soft); }
-  /* section titles: a steel plate with a burning edge */
-  #menu h2 { display: flex; justify-content: space-between; align-items: center; margin: 18px 0 4px; padding: 5px 12px;
-             font: var(--title); font-size: 15px; letter-spacing: .8px; text-transform: uppercase; color: var(--fire-1);
-             border-radius: 2px; border-left: 4px solid var(--fire-3);
-             background: linear-gradient(90deg, rgba(255,106,26,.18), var(--steel-2) 40%, var(--steel-1)); }
-  #menu .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 4px;
-               border-top: 1px solid rgba(122,132,148,.18); font-size: 13px; }
-  #menu .row:first-of-type, #menu h2 + .row { border-top: 0; }
-  #menu .row > span { min-width: 0; font-weight: 600; color: var(--ink); }
-  #menu .sub { font-weight: normal; font-size: 11px; color: var(--ink-soft); }
-  #menu .seg { display: flex; flex-wrap: nowrap; flex: none; gap: 4px; justify-content: flex-end; }
-  /* buttons: steel; a switch that is on, or a picked option, burns orange to gold */
-  #menu button { all: unset; box-sizing: border-box; cursor: pointer; padding: 5px 14px; border-radius: 3px; text-align: center;
-                 white-space: nowrap; font: 600 12px var(--body); color: var(--text);
-                 background: linear-gradient(var(--steel-3), var(--steel-2)); border: 1px solid var(--edge);
-                 box-shadow: inset 0 1px 0 rgba(255,255,255,.1), 0 2px 0 var(--steel-0); }
-  #menu button:hover { border-color: var(--edge-hi); background: linear-gradient(#363d49, var(--steel-3)); }
-  #menu button:active { transform: translateY(1px); box-shadow: inset 0 1px 0 rgba(255,255,255,.1), 0 1px 0 var(--steel-0); }
-  #menu button:focus-visible { outline: 3px solid var(--fire-2); outline-offset: 2px; }
-  #menu button[aria-pressed="true"] { color: #2a0d03; border-color: #ffcf7a;
-    background: linear-gradient(var(--fire-1), var(--fire-2) 50%, var(--fire-3)); box-shadow: inset 0 1px 0 #fff2c4, 0 0 10px rgba(255,140,40,.45), 0 2px 0 var(--steel-0); }
-  #menu button[aria-pressed="true"]:hover { background: linear-gradient(#fff0b4, #ffc04a 50%, #ff7d33); }
-  #menu button.bind { min-width: 150px; padding: 4px 10px; border-radius: 3px; font: 13px Verdana, Tahoma, sans-serif; color: var(--text);
-    background: var(--steel-0); border: 1px solid var(--edge); box-shadow: inset 0 1px 3px rgba(0,0,0,.6); }
-  #menu button.bind:hover { border-color: var(--fire-2); }
-  #menu button.bind.waiting { background: #2a1408; border-color: var(--fire-3); color: var(--fire-1); font-weight: bold; }
-  #menu button.link { padding: 0 2px; border: 0; background: none; box-shadow: none; border-radius: 0; font-weight: normal;
-    color: var(--fire-2); text-decoration: underline; font-style: normal; letter-spacing: 0; text-transform: none; }
-  #menu button.link:hover { color: #fff; background: none; }
-  #menu .vol { display: flex; align-items: center; gap: 6px; }
-  #menu .vol button { padding: 3px 10px; }
-  #menu .vol input[type=range] { width: 150px; accent-color: var(--fire-3); cursor: pointer; }
-  #menu .vol .val { min-width: 40px; text-align: right; font-weight: bold; color: var(--ink); }
+  #menu .win { width: min(720px, 100%); max-height: calc(100vh - 32px); display: flex; flex-direction: column; }
+  #menu .bar { flex: none; font-size: 19px; }
+  #menu .bar h1 { flex: 1; margin: 0; font: inherit; }
+  /* back: the game's ◯ BACK */
+  #menu .bar #close { display: inline-flex; align-items: center; gap: 7px; padding: 3px 4px; border: 0; background: none; box-shadow: none;
+    font-size: 13px; text-shadow: 0 1px 0 #000; }
+  #menu .bar #close::before { content: ""; width: 14px; height: 14px; border-radius: 50%; border: 2px solid currentColor;
+    box-shadow: inset 0 0 0 2px #0b0c0f, inset 0 0 0 4px currentColor; }
+  #menu .body { overflow: auto; padding: 6px 18px 18px; scrollbar-color: #6e737c #0b0c0f; }
+  #menu .hint { margin: 4px 0 6px; font-size: 12px; color: var(--muted); }
+  /* a section's name: the menus' words behind the red mark */
+  #menu h2 { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 18px 0 4px; padding: 0 0 6px 16px; position: relative;
+             font: italic 800 expanded 16px/1.2 var(--wide); letter-spacing: .5px; text-transform: uppercase; color: #fff; text-shadow: 0 2px 0 #000;
+             border-bottom: 1px solid; border-image: linear-gradient(90deg, rgba(220,224,230,.6), transparent) 1; }
+  #menu h2::before { content: ""; position: absolute; left: 2px; top: 2px; width: 6px; height: 16px; transform: skewX(-20deg);
+    background: linear-gradient(var(--red-1), var(--red-2) 55%, var(--red-3)); }
+  #menu .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 8px; border-radius: 6px;
+               border-top: 1px solid var(--hair); font-size: 13px; }
+  #menu .row:first-of-type, #menu h2 + .row { border-top-color: transparent; }
+  #menu .row:hover { background: rgba(51,183,240,.06); }
+  #menu .row > span { min-width: 0; flex: 1; font-weight: 700; color: var(--text); letter-spacing: .2px; }
+  #menu .sub { font-weight: normal; font-size: 11px; color: var(--muted); }
+  #menu .seg { display: flex; flex-wrap: nowrap; flex: none; gap: 2px; justify-content: flex-end; }
+  #menu .seg button, #menu button.toggle { background: none; box-shadow: none; padding: 4px 12px 5px; font-size: 13px; }
+  #menu .seg button[aria-pressed="true"], #menu button.toggle[aria-pressed="true"] {
+    background: linear-gradient(rgba(0,0,0,.85), rgba(12,13,16,.85)) padding-box, var(--rim-soft) border-box; }
+  #menu button.toggle { min-width: 60px; }
+  #menu button.bind { min-width: 150px; padding: 4px 10px; font: 13px var(--body); text-transform: none; letter-spacing: .3px; color: #fff;
+    background: rgba(0,0,0,.72); border: 1px solid #4e535c; box-shadow: inset 0 2px 4px rgba(0,0,0,.85); }
+  #menu button.bind:hover { border-color: var(--cyan); color: #fff; }
+  #menu button.bind.waiting { border-color: var(--red-1); color: #ffd2cc; background: rgba(90,6,10,.6); font-weight: bold; }
+  #menu button.link { padding: 0 2px; border: 0; background: none; box-shadow: none; border-radius: 0;
+    font: 12px var(--body); text-transform: none; letter-spacing: 0; color: var(--cyan); text-decoration: underline; text-shadow: none; }
+  #menu button.link:hover { color: #fff; }
+  #menu .vol { display: flex; align-items: center; gap: 7px; }
+  #menu .vol button { padding: 2px 11px 3px; font-size: 15px; }
+  #menu .vol input[type=range] { width: 150px; accent-color: var(--cyan); cursor: pointer; }
+  #menu .vol .val { min-width: 44px; text-align: right; font: italic 800 expanded 14px var(--wide); color: #fff; }
   #menu .grid { display: grid; grid-template-columns: 1fr 1fr; column-gap: 24px; }
-  #menu .grid .row:nth-child(2) { border-top: 0; }
-  @media (max-width: 560px) { #menu .grid { grid-template-columns: 1fr; } #menu .grid .row:nth-child(2) { border-top: 1px solid rgba(122,132,148,.18); } }
+  #menu .grid .row:nth-child(2) { border-top-color: transparent; }
+  @media (max-width: 560px) { #menu .grid { grid-template-columns: 1fr; } #menu .grid .row:nth-child(2) { border-top-color: var(--hair); } }
 
-  /* ---- Who plays (and the ISO picker): the arena. One player per window, each with their own
-     save (serve_web.py accounts). Behind it all the disc's key art in the smoke (serve_web.py
-     /art/; a drawn smoke-and-embers until then, or without it); the same art on the side. */
-  .sky { overflow: hidden; background: radial-gradient(ellipse at 70% 85%, rgba(255,106,26,.28), transparent 55%),
-           radial-gradient(ellipse at 25% 15%, rgba(169,200,232,.16), transparent 60%),
-           linear-gradient(#141a22, #07080a 75%) fixed, #07080a; }
-  .sky::before { content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 0; opacity: .22;
-    background: url(wallpaper.webp) center / cover no-repeat; filter: blur(14px) saturate(1.2); }
+  /* ---- Who plays (and the ISO picker): the menus' storm sky, the disc's key art on the right
+     (serve_web.py /art/ and web/wallpaper.webp). One player per window, each with their own save
+     (serve_web.py accounts). */
+  .sky { overflow: hidden; background: var(--clouds) center / cover no-repeat fixed,
+           radial-gradient(ellipse 45% 35% at 62% 52%, rgba(190,40,30,.22), transparent 70%) fixed,
+           radial-gradient(ellipse at 28% 22%, rgba(214,218,246,.5), transparent 55%) fixed,
+           radial-gradient(ellipse at 85% 85%, rgba(88,90,128,.55), transparent 60%) fixed,
+           linear-gradient(165deg, #74779a, #44465c 45%, #1c1d27) fixed, #1c1d27; }
   .sky::after { content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 0;
-    background: radial-gradient(ellipse at 50% 40%, transparent 35%, rgba(0,0,0,.65)); }
+    background: radial-gradient(ellipse at 45% 45%, transparent 40%, rgba(0,0,0,.6)); }
 
-  #login { position: fixed; inset: 0; display: none; z-index: 2; font-family: var(--body); color: var(--ink); overflow: hidden auto; }
+  #login { position: fixed; inset: 0; display: none; z-index: 2; font-family: var(--body); color: var(--text); overflow: hidden auto; }
   #login.open { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   /* the key art: the right side, full height, fading in from the form's side */
   #login-art, #preload-art { position: absolute; right: 0; bottom: 0; height: 100%; min-width: 55%; max-width: 62%; object-fit: cover; object-position: right;
@@ -126,109 +217,50 @@
     z-index: 1; }
   #login .side, #preload .side { position: relative; z-index: 2; display: flex; flex-direction: column; align-items: center; padding: 24px;
     box-sizing: border-box; min-height: 100vh; justify-content: safe center; gap: 10px; }
-  #login .logo-side, #preload .logo-side { justify-content: flex-start; padding-top: max(24px, 6vh); }
-
-  /* a window: brushed steel edged in fire */
-  .win { position: relative; width: min(420px, 100%); box-sizing: border-box; border-radius: 4px; text-align: left;
-    background: linear-gradient(135deg, #2c323c, #151920 55%, #0c0e12); border: 1px solid var(--edge); padding: 6px;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,.12), 0 0 0 1px #000, 0 14px 40px rgba(0,0,0,.65), 0 0 28px rgba(255,90,20,.12); }
-  .win::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 3px; border-radius: 4px 4px 0 0; pointer-events: none;
-    background: linear-gradient(90deg, transparent, var(--fire-3) 20%, var(--fire-1) 50%, var(--fire-3) 80%, transparent); }
-  .win .bar { position: relative; padding: 7px 12px 8px; color: #fff; font: var(--title); font-size: 19px; letter-spacing: 1px;
-    text-transform: uppercase; text-shadow: 0 2px 0 #000; display: flex; align-items: center; gap: 10px; }
-  /* the window's mark: a small burning diamond */
-  .win .bar .ball { width: 11px; height: 11px; flex: none; transform: rotate(45deg);
-    background: linear-gradient(135deg, var(--fire-1), var(--fire-3) 55%, var(--red-dark)); box-shadow: 0 0 8px rgba(255,120,30,.8); }
-  .win .body { position: relative; padding: 14px 18px 16px; border-radius: 2px; color: var(--ink);
-    background: linear-gradient(rgba(10,12,16,.92), rgba(16,19,25,.95)); box-shadow: inset 0 0 0 1px rgba(122,132,148,.22), inset 0 8px 24px rgba(0,0,0,.45); }
-  .win p { margin: 0 0 10px; font-size: 13px; line-height: 1.45; color: var(--ink); }
-  .tabs { display: flex; gap: 4px; margin: 0 0 4px; border-bottom: 2px solid var(--fire-3); }
-  .tabs button { all: unset; cursor: pointer; padding: 6px 14px 4px; border-radius: 3px 3px 0 0; font: 600 13px var(--body);
-    color: var(--ink-soft); background: linear-gradient(var(--steel-3), var(--steel-2)); border: 1px solid var(--edge); border-bottom: 0; }
-  .tabs button:not([aria-pressed="true"]):hover { color: var(--text); }
-  .tabs button[aria-pressed="true"] { color: #2a0d03; background: linear-gradient(var(--fire-1), var(--fire-2)); border-color: #ffcf7a; }
-  .tabs button:focus-visible { outline: 3px solid var(--fire-2); outline-offset: 2px; }
-  .field { display: flex; flex-direction: column; gap: 4px; margin-top: 12px; font-size: 12px; font-weight: 600; color: var(--ink); }
-  .field small { font-weight: normal; color: var(--ink-soft); margin-left: 4px; }
-  .field input { font: 15px Verdana, Tahoma, sans-serif; color: var(--text); background: var(--steel-0); padding: 6px 8px; border-radius: 3px;
-    border: 1px solid var(--edge); box-shadow: inset 0 1px 3px rgba(0,0,0,.6); }
-  .field input:hover { border-color: var(--edge-hi); }
-  .field input:focus { outline: 0; border-color: var(--fire-2); box-shadow: 0 0 0 3px rgba(255,140,40,.25), inset 0 1px 3px rgba(0,0,0,.6); }
-  /* the browser's autofill keeps the page's colors */
-  .field input:-webkit-autofill, .field input:autofill { -webkit-text-fill-color: var(--text); caret-color: var(--text);
-    -webkit-box-shadow: 0 0 0 40px var(--steel-0) inset; box-shadow: 0 0 0 40px var(--steel-0) inset; transition: background-color 99999s; }
-  .field input:-webkit-autofill:focus, .field input:autofill:focus { -webkit-box-shadow: 0 0 0 40px var(--steel-0) inset, 0 0 0 3px rgba(255,140,40,.25);
-    box-shadow: 0 0 0 40px var(--steel-0) inset, 0 0 0 3px rgba(255,140,40,.25); }
-  .check { display: flex; gap: 8px; align-items: flex-start; margin-top: 12px; font-size: 12px; color: var(--ink); }
-  .check input { margin-top: 2px; accent-color: var(--fire-3); }
-  #login .error { color: #ff7b6b; font-size: 13px; font-weight: bold; margin: 10px 0 8px; }
-  #login .error:empty { margin: 14px 0 0; }
-  /* the main button: burning orange to gold */
-  .go { all: unset; position: relative; cursor: pointer; padding: 8px 12px; border-radius: 3px;
-    font: italic 800 18px/1.1 "Bahnschrift Condensed", "Arial Narrow", Impact, sans-serif; letter-spacing: 1px; text-transform: uppercase;
-    color: #2a0d03; text-shadow: 0 1px 0 rgba(255,240,200,.6);
-    background: linear-gradient(var(--fire-1), var(--fire-2) 45%, var(--fire-3)); border: 1px solid #ffd58a;
-    box-shadow: inset 0 1px 0 #fff2c4, 0 3px 0 #7a2208, 0 6px 16px rgba(255,90,20,.35); }
-  .go:hover { background: linear-gradient(#fff0b4, #ffc04a 45%, #ff7d33); box-shadow: inset 0 1px 0 #fff2c4, 0 3px 0 #7a2208, 0 0 22px rgba(255,140,40,.75); }
-  .go:active { transform: translateY(2px); box-shadow: inset 0 1px 0 #fff2c4, 0 1px 0 #7a2208; }
-  .go:focus-visible { outline: 3px solid var(--ice); outline-offset: 3px; }
-  .go:disabled { background: linear-gradient(#5a5f66, #3d4148); color: #9aa3ad; border-color: var(--edge); box-shadow: none; cursor: default; }
-  .actions { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
-  /* the other buttons: steel */
-  .guest { all: unset; cursor: pointer; padding: 6px 14px; border-radius: 3px; font: 600 12px var(--body); color: var(--text);
-    background: linear-gradient(var(--steel-3), var(--steel-2)); border: 1px solid var(--edge);
-    box-shadow: inset 0 1px 0 rgba(255,255,255,.1), 0 2px 0 var(--steel-0); }
-  .guest:hover { border-color: var(--edge-hi); background: linear-gradient(#363d49, var(--steel-3)); }
-  .guest:active { transform: translateY(1px); box-shadow: inset 0 1px 0 rgba(255,255,255,.1), 0 1px 0 var(--steel-0); }
-  .guest:focus-visible { outline: 3px solid var(--fire-2); outline-offset: 2px; }
-  .tip { margin: 16px 0 0 !important; padding-top: 10px; border-top: 1px solid rgba(122,132,148,.2); font-size: 11px !important; color: var(--ink-soft) !important; text-align: center; }
-  /* what the server offers: two lights on a steel strip */
-  .leds { display: flex; flex-wrap: wrap; gap: 4px 16px; justify-content: center; font-size: 12px; font-weight: 600; color: var(--text); margin-top: 4px;
-    padding: 5px 14px; border-radius: 3px; background: linear-gradient(var(--steel-2), var(--steel-1)); border: 1px solid var(--edge);
-    box-shadow: 0 3px 10px rgba(0,0,0,.45); }
-  .leds span::before { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: -1px;
-    background: radial-gradient(circle at 35% 35%, #8a919b 0 20%, #3a4048 60%); box-shadow: 0 0 0 1px rgba(0,0,0,.5); }
-  .leds span.on::before { background: radial-gradient(circle at 35% 35%, #fff 0 20%, var(--fire-2) 60%); box-shadow: 0 0 8px var(--fire-3), 0 0 0 1px rgba(0,0,0,.5); }
-  .fine { font-size: 11px; color: var(--ink-soft); text-align: center; max-width: 420px; margin: 0; padding: 4px 12px; border-radius: 3px;
-    background: rgba(7,8,10,.7); }
-  #login.new .login-only, #login:not(.new) .new-only { display: none; }
+  #login .logo-side, #preload .logo-side { justify-content: flex-end; padding-bottom: max(20px, 4vh); }
+  /* the logo at the bottom of the key art, under the fighter (web/logo.webp, transparent) */
+  .tlogo { width: min(440px, 80%); }
+  .tlogo img { display: block; width: 100%; height: auto; max-height: 30vh; object-fit: contain;
+    filter: drop-shadow(0 6px 14px rgba(0,0,0,.7)); }
 
   /* ---- First visit: the game comes to this browser (the ISO and the HD textures, kept here so the
-     game never waits on the network), between the sign-in and the game. The bar heats up: embers
-     to fire, a spark riding its end. */
-  #preload { position: fixed; inset: 0; display: none; z-index: 2; font-family: var(--body); color: var(--ink); overflow: hidden auto; }
+     game never waits on the network), between the sign-in and the game. The bar is the fight's
+     life gauge, teal in its dark red frame; its count the round timer. */
+  #preload { position: fixed; inset: 0; display: none; z-index: 2; font-family: var(--body); color: var(--text); overflow: hidden auto; }
   #preload.open { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-  .meter { position: relative; height: 26px; margin: 4px 0 8px; border-radius: 3px; overflow: hidden;
-    background: linear-gradient(#07080a, #14171d); border: 1px solid var(--edge); box-shadow: inset 0 2px 6px rgba(0,0,0,.7); }
+  .meter { position: relative; height: 24px; margin: 4px 0 10px; border-radius: 5px; overflow: hidden; border: 2px solid transparent;
+    background: linear-gradient(#101113, #050506) padding-box, linear-gradient(#b3241a, #5c0607 60%, #9a1c14) border-box;
+    box-shadow: 0 0 0 1px #000, inset 0 2px 6px rgba(0,0,0,.8); }
   .meter i { position: absolute; left: 0; top: 0; bottom: 0; width: 0; overflow: hidden;
-    background: linear-gradient(90deg, var(--red-dark), var(--red) 40%, var(--fire-3) 75%, var(--fire-2));
-    box-shadow: 0 0 14px rgba(255,106,26,.6); transition: width .4s ease-out; }
+    background: linear-gradient(#9af8de, #33dbb0 38%, #12a982 62%, #1cc89c);
+    box-shadow: 0 0 12px rgba(51,219,176,.55); transition: width .4s ease-out; }
   .meter i::before { content: ""; position: absolute; top: 0; left: -29px; right: 0; bottom: 0;
-    background: repeating-linear-gradient(-45deg, rgba(255,230,160,.22) 0 6px, transparent 6px 14px);
+    background: repeating-linear-gradient(-45deg, rgba(255,255,255,.16) 0 6px, transparent 6px 14px);
     animation: meter-run .7s linear infinite; }
+  .meter i::after { content: ""; position: absolute; left: 0; right: 0; top: 1px; height: 35%; background: linear-gradient(rgba(255,255,255,.55), rgba(255,255,255,0)); }
   @keyframes meter-run { to { transform: translateX(19.8px); } }
-  .meter .ball { position: absolute; top: 6px; left: 4px; width: 12px; height: 12px; transform: rotate(45deg); transition: left .4s ease-out;
-    background: linear-gradient(135deg, #fff6d0, var(--fire-2)); box-shadow: 0 0 10px var(--fire-1); }
-  .meter span { position: absolute; inset: 0; display: grid; place-items: center; font: italic 800 15px "Bahnschrift Condensed", "Arial Narrow", Impact, sans-serif;
-    color: #fff; text-shadow: 0 1px 0 #000, 0 0 4px rgba(0,0,0,.9); letter-spacing: .8px; }
-  .pre-row { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; font-weight: 600; color: var(--ink); }
-  .pre-row span:last-child { color: var(--ink-soft); font-weight: normal; }
-  #pre-eta { margin: 6px 0 14px; font-size: 12px; color: var(--ink-soft); min-height: 1.2em; }
-  .pre-note { font-size: 12px; color: var(--ink); }
-  @media (prefers-reduced-motion: reduce) { .meter i::before { animation: none; } .meter i, .meter .ball { transition: none; } }
+  .meter .ball { display: none; }
+  .meter span { position: absolute; inset: 0; display: grid; place-items: center; font: italic 900 expanded 15px var(--wide); letter-spacing: .6px;
+    color: #fff1df; -webkit-text-stroke: 3px #8a1208; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(0,0,0,.6); }
+  .pre-row { display: flex; justify-content: space-between; gap: 10px; font: italic 700 expanded 12px var(--wide); letter-spacing: .3px; text-transform: uppercase; color: var(--text); }
+  .pre-row span:last-child { font: 12px var(--body); text-transform: none; color: var(--muted); }
+  #pre-eta { margin: 6px 0 14px; font-size: 12px; color: var(--muted); min-height: 1.2em; }
+  .pre-note { font-size: 12px; color: var(--soft); }
+  @media (prefers-reduced-motion: reduce) { .meter i::before { animation: none; } .meter i { transition: none; } .corner, .go, .guest { transition: none; } }
 
   /* ---- Phones and tablets: the picture, the logo and a note */
   #mobile { display: none; }
   html.mobile, html.mobile body { overflow: auto; }
   html.mobile #stage, html.mobile #login, html.mobile #picker, html.mobile #preload, html.mobile #gear, html.mobile #full, html.mobile #status, html.mobile #menu { display: none !important; }
   html.mobile #mobile { display: grid; position: fixed; inset: 0; z-index: 4; place-items: center; padding: 16px; overflow: auto;
-    font-family: var(--body); color: var(--ink); }
+    font-family: var(--body); color: var(--text); }
   #mobile .mwrap { position: relative; z-index: 1; width: min(420px, 100%); display: flex; flex-direction: column; align-items: center; gap: 14px; }
-  #mobile .mlogo { width: 100%; height: auto; display: block; border-radius: 4px; border: 1px solid var(--edge);
-    box-shadow: 0 10px 28px rgba(0,0,0,.6), 0 0 24px rgba(255,90,20,.18); }
+  #mobile .mlogo { width: 100%; height: auto; display: block; box-sizing: border-box; border-radius: 12px; border: 2px solid #9aa0a9;
+    box-shadow: 0 0 0 1px #000, 0 12px 30px rgba(0,0,0,.6); }
   #mobile .win { width: 100%; }
-  #mobile .body p { margin: 0; font-size: 15px; line-height: 1.5; }
-  #mobile .body p + p { margin-top: 10px; font-size: 12px; color: var(--ink-soft); }
+  #mobile .body { padding-bottom: 16px; }
+  #mobile .body p { margin: 0; font-size: 15px; line-height: 1.5; color: var(--text); }
+  #mobile .body p + p { margin-top: 10px; font-size: 12px; color: var(--muted); }
   /* Phones and narrow windows: the key art (it has the logo) on top, the form under it. */
   @media (max-width: 820px) {
     #login.open, #preload.open { grid-template-columns: 1fr; align-content: start; }
@@ -237,7 +269,7 @@
     #login .form-side, #preload .form-side { padding-bottom: 24px; }
     #login-art, #preload-art { position: relative; order: -1; justify-self: center; box-sizing: border-box; width: min(420px, calc(100% - 32px));
       height: auto; min-width: 0; max-width: none; margin-top: 16px; object-fit: contain; -webkit-mask-image: none; mask-image: none;
-      border-radius: 4px; border: 1px solid var(--edge); box-shadow: 0 10px 28px rgba(0,0,0,.6); }
+      border-radius: 12px; border: 2px solid #9aa0a9; box-shadow: 0 0 0 1px #000, 0 12px 30px rgba(0,0,0,.6); }
   }
 </style>
 </head>
@@ -268,22 +300,22 @@
   <img id="login-art" src="wallpaper.webp" alt="" onerror="this.remove()">
   <div class="side form-side">
     <form class="win" id="login-form" novalidate>
-      <div class="bar"><span class="ball"></span><span id="login-title">Here comes a new challenger!</span></div>
+      <div class="bar"><span class="ball"></span><span id="login-title">Get ready for the next battle!</span></div>
       <div class="body">
         <div class="tabs"><button type="button" id="tab-login" aria-pressed="true">Log in</button><button type="button" id="tab-new" aria-pressed="false">New player</button></div>
         <label class="field"><span>Player name <small>(up to 10 letters or digits)</small></span><input id="l-name" autocomplete="username" maxlength="10" spellcheck="false"></label>
         <label class="field">Password<input id="l-pass" type="password" autocomplete="current-password"></label>
         <label class="field new-only">Password again<input id="l-pass2" type="password" autocomplete="new-password"></label>
         <p class="error" id="l-error" role="alert"></p>
-        <div class="actions"><button type="submit" class="go" id="l-submit">Log in &amp; fight!</button>
-          <button type="button" class="guest" id="l-guest">Play without an account</button></div>
-        <p class="tip">Based on the PSP version: Tekken 6 (2009).</p>
+        <div class="actions"><button type="submit" class="go" id="l-submit">Log in &amp; fight!</button></div>
+        <p class="tip"><span>Based on the PSP version: Tekken 6 (2009).</span><span class="hints"><b class="k">⏎</b>OK</span></p>
       </div>
     </form>
     <div class="leds" aria-live="polite"><span id="led-net">Network play</span><span id="led-hd">HD textures</span></div>
     <p class="fine">A fan-made port: bring your own copy of the game.<br>Not affiliated with Sony.</p>
   </div>
   <div class="side logo-side">
+    <div class="tlogo"><img src="logo.webp" alt="Tekken 6" onerror="this.parentNode.remove()"></div>
   </div>
 </div>
 <div id="preload" class="sky" role="dialog" aria-modal="true" aria-labelledby="pre-title">
@@ -304,6 +336,7 @@
     <p class="fine">Kept in this browser, so the game never waits for the network.</p>
   </div>
   <div class="side logo-side">
+    <div class="tlogo"><img src="logo.webp" alt="Tekken 6" onerror="this.parentNode.remove()"></div>
   </div>
 </div>
 <div id="status">Loading…</div>
@@ -321,7 +354,7 @@
 </button>
 <div id="menu" role="dialog" aria-modal="true" aria-labelledby="menu-title">
   <div class="win">
-    <div class="bar"><span class="ball"></span><h1 id="menu-title">Settings</h1><button id="close">Back to the game</button></div>
+    <div class="bar"><span class="ball"></span><h1 id="menu-title">Settings</h1><button id="close" aria-label="Back to the game" title="Back to the game (Esc)">Back</button></div>
     <div class="body">
     <p class="hint">Esc, the gear button or the gamepad's Home button open this menu. On a gamepad: the d-pad moves, ✕ selects, ◯ goes back.</p>
 
@@ -338,7 +371,7 @@
     <div class="row"><span>Internal resolution<br><span class="sub">The PSP's 480x272 drawn this many times larger (lower: lighter for the computer)</span></span><div class="seg" id="scale"></div></div>
     <div class="row"><span>Original textures<br><span class="sub">The game's own pictures: smooth as the PSP filters them, sharp (xBR) or as crisp pixels; Sharp and Pixels turn the HD textures off</span></span><div class="seg" id="texf"></div></div>
 
-    <div class="row"><span>HD textures<br><span class="sub">The texture pack in build/textures, the sharp lettering included; off: the game's own textures</span></span><button id="hd">On</button></div>
+    <div class="row"><span>HD textures<br><span class="sub">The texture pack in build/textures, the sharp lettering included; off: the game's own textures</span></span><button id="hd" class="toggle">On</button></div>
 
     <h2>Keyboard <button class="link" id="keys-reset">Restore defaults</button></h2>
     <div class="grid" id="keys"></div>
@@ -674,7 +707,6 @@ if (!window.t6Mobile) {
       };
       document.getElementById('tab-login').addEventListener('click', () => mode(false));
       document.getElementById('tab-new').addEventListener('click', () => mode(true));
-      document.getElementById('l-guest').addEventListener('click', () => { writeSession({guest: true}); done(null); });
       form.addEventListener('submit', async (e) => {
         e.preventDefault();
         const name = nameEl.value.trim(), password = passEl.value;
@@ -704,7 +736,7 @@ if (!window.t6Mobile) {
       dressLogin();
     };
     const saved = readSession();
-    if ((saved && saved.guest) || new URLSearchParams(location.search).get('guest') === '1') return done(null);  // ?guest=1: tests
+    if (new URLSearchParams(location.search).get('guest') === '1') return done(null);  // ?guest=1: tests (no button: every player signs in)
     fetch('account/me', {headers: saved && saved.token ? {'X-T6-Session': saved.token} : {}}).then((r) => {
       if (r.ok) return r.json().then((j) => done({name: j.name, token: saved.token}));
       if (r.status === 401) return ask();
