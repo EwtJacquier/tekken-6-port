@@ -1073,7 +1073,34 @@ if (!window.t6Mobile) {
     texPump();
   });
 
-  // The bar: the ISO's blocks, then the pack's pictures, into this browser's stores (whatever is
+  // The HD movies (textures/movies/<name>.h264, runtime/hdmovie.c): from this browser's store when the
+  // preload (or an earlier play) put them there, kept under their contents' sum (the server's
+  // /status lists them); else from the server, and kept (fetched when the game opened one, the first
+  // seconds of a big one played as the PSP's).
+  let movieList = null;
+  const movies = () => movieList || (movieList = fetch('status', {credentials: 'same-origin'})
+    .then((r) => r.ok ? r.json() : {}).then((st) => st.movies || []).catch(() => []));
+  const movieKey = (m) => here('textures/movies/' + m.name + '.h264?v=' + m.sum);
+  Module.t6Movie = async (url) => {
+    const name = (url.match(/movies\/([a-z0-9_]+)\.h264$/) || [])[1];
+    const m = name && (await movies()).find((x) => x.name === name);
+    if (!m) {  // none in the pack: the server answers "nothing"
+      const r = await fetch(url, {credentials: 'same-origin'});
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return new Uint8Array(await r.arrayBuffer());
+    }
+    const key = movieKey(m);
+    const store = KEEP && settings.hd ? await caches.open(TEX_CACHE).catch(() => null) : null;
+    let r = store && await store.match(key);
+    if (!r) {
+      r = await fetch(key, {credentials: 'same-origin'});
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      if (store) await store.put(key, r.clone()).catch(() => {});
+    }
+    return new Uint8Array(await r.arrayBuffer());
+  };
+
+  // The bar: the ISO's blocks, then the pack's pictures and movies, into this browser's stores (whatever is
   // there already is skipped; a visit that left halfway goes on from there). Once all of it is in,
   // a mark in each store tells later visits to go straight to the game.
   async function preload(iso) {
@@ -1084,13 +1111,16 @@ if (!window.t6Mobile) {
     const index = texStore ? await fetch('textures/index.txt').then((r) => r.ok ? r.text() : '').catch(() => '') : '';
     const files = index.split('\n').map((l) => l.trim().split(/\s+/)).filter((f) => f.length >= 4 && !f[0].startsWith('#'))
       .map((f) => here('textures/' + f[3]));
+    const mlist = texStore ? await movies() : [];
+    const unique = [...new Map(mlist.map((m) => [m.sum, m])).values()];  // twins once
+    const tag = index + mlist.map((m) => m.name + ':' + m.sum).join(',');
     let h = 0x811c9dc5;
-    for (let i = 0; i < index.length; i++) h = Math.imul(h ^ index.charCodeAt(i), 16777619) >>> 0;
+    for (let i = 0; i < tag.length; i++) h = Math.imul(h ^ tag.charCodeAt(i), 16777619) >>> 0;
     const isoMark = iso.key('complete'), texMark = here('__tex/complete-' + h.toString(16));
-    const isoDone = !!(await isoStore.match(isoMark)), texDone = !files.length || !!(await texStore.match(texMark));
+    const isoDone = !!(await isoStore.match(isoMark)), texDone = (!files.length && !mlist.length) || !!(await texStore.match(texMark));
     if (isoDone && texDone) return;
     const st = await fetch('status').then((r) => r.json()).catch(() => ({}));
-    const total = (isoDone ? 0 : iso.size) + (texDone ? 0 : st.textures_bytes || files.length * 4e5);
+    const total = (isoDone ? 0 : iso.size) + (texDone ? 0 : (st.textures_bytes || files.length * 4e5) + unique.reduce((n, m) => n + m.bytes, 0));
     try {
       const est = await navigator.storage.estimate();
       if (est.quota && est.quota < total * 1.1) {
@@ -1162,6 +1192,43 @@ if (!window.t6Mobile) {
           });
           show();
         });
+        show('The HD movies');
+        const kept = new Map();  // sum -> the key it is kept under
+        for (const m of mlist) {  // one at a time: they are big
+          if (skip) break;
+          const key = movieKey(m), twin = kept.get(m.sum);
+          if (await texStore.match(key)) {
+            if (!twin) done += m.bytes;
+            kept.set(m.sum, key);
+            show();
+            continue;
+          }
+          const copy = twin && await texStore.match(twin);
+          if (copy) {
+            await texStore.put(key, copy);
+            continue;
+          }
+          await tries(async () => {
+            let n = 0;
+            try {
+              const r = await fetch(key, {credentials: 'same-origin'});
+              if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + key);
+              const reader = r.body.getReader(), parts = [];
+              for (;;) {  // the bar moves while it comes
+                const {done: end, value} = await reader.read();
+                if (end) break;
+                parts.push(value);
+                n += value.length, done += value.length, got += value.length;
+                show();
+              }
+              await texStore.put(key, new Response(new Blob(parts), {headers: {'Content-Type': 'video/h264', 'Content-Length': String(n)}}));
+              kept.set(m.sum, key);
+            } catch (e) {
+              done -= n, got -= n;
+              throw e;
+            }
+          });
+        }
         if (!skip && failed === before) await texStore.put(texMark, new Response('1'));
       }
       finish();
